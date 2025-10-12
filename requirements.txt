@@ -9,8 +9,6 @@ numpy==1.26.4
 # Streamlit video component (WebRTC)
 streamlit-webrtc==0.47.1
 
-# For nicer logging in Streamlit
-rich==14.2.0
 
 
 
