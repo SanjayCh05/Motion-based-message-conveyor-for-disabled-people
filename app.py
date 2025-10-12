@@ -1,12 +1,20 @@
-# streamlit_unified_detection_headless_full.py
-import streamlit as st
+# streamlit_unified_headless.py
+"""
+Headless Streamlit App:
+- Hand gestures, head pose, blink detection
+- st.camera_input instead of cv2.VideoCapture
+- Pygame audio playback
+- Twilio SMS alerts
+"""
 
-import mediapipe as mp
+import streamlit as st
+from PIL import Image
 import numpy as np
+import mediapipe as mp
 import pygame
 import threading
-import os
 import time
+import os
 from math import hypot
 from queue import Queue
 from collections import deque
@@ -17,6 +25,7 @@ from collections import deque
 st.set_page_config(page_title="Unified Gesture/Head/Blink Detection", layout="wide")
 st.title("🧠 Unified: Hand + Head + Blink Detection (Headless)")
 
+# Sidebar toggles
 st.sidebar.header("Modules")
 enable_hand = st.sidebar.checkbox("Enable Hand Detection", True)
 enable_eye = st.sidebar.checkbox("Enable Blink Detection", True)
@@ -76,7 +85,7 @@ def enqueue_audio(path):
         audio_queue.put(path)
 
 # ----------------------------
-# Mediapipe
+# Mediapipe setup
 # ----------------------------
 mp_hands = mp.solutions.hands
 mp_face_mesh = mp.solutions.face_mesh
@@ -89,6 +98,7 @@ hands = mp_hands.Hands(
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5,
 )
+
 face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=False,
     max_num_faces=1,
@@ -98,18 +108,32 @@ face_mesh = mp_face_mesh.FaceMesh(
 )
 
 # ----------------------------
-# Helpers
+# Helper constants
 # ----------------------------
 LEFT_EYE = [33, 160, 158, 133, 153, 144]
 RIGHT_EYE = [362, 385, 387, 263, 373, 380]
 FINGER_TIPS = [8, 12, 16, 20]
 
+EAR_THRESHOLD = 0.3
+CONSEC_FRAMES = 4
+LONG_BLINK_SECONDS = 2.0
+DOUBLE_BLINK_MAX_INTERVAL = 0.8
+
+YAW_RIGHT_THRESH = 10
+YAW_LEFT_THRESH = -10
+PITCH_UP_THRESH = -12
+PITCH_DOWN_THRESH = 12
+STABLE_TIME = 0.6
+
+# ----------------------------
+# Helpers
+# ----------------------------
 def eye_aspect_ratio(landmarks, left_indices, right_indices):
     def _ear(points):
         v1 = hypot(points[1][0]-points[5][0], points[1][1]-points[5][1])
         v2 = hypot(points[2][0]-points[4][0], points[2][1]-points[4][1])
         h = hypot(points[0][0]-points[3][0], points[0][1]-points[3][1])
-        return (v1+v2)/(2.0*h) if h!=0 else 0
+        return (v1+v2)/(2.0*h) if h != 0 else 0
     left = [(landmarks[i].x, landmarks[i].y) for i in left_indices]
     right = [(landmarks[i].x, landmarks[i].y) for i in right_indices]
     return (_ear(left)+_ear(right))/2.0
@@ -142,18 +166,17 @@ def detect_hand_gesture(fingers):
 FRAME_WINDOW = st.image([])
 
 camera_file = st.camera_input("Start your webcam")
-
 if camera_file:
-    file_bytes = np.asarray(bytearray(camera_file.read()), dtype=np.uint8)
-    frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
+    img = Image.open(camera_file)
+    frame = np.array(img)  # RGB format
     # Resize
     h0, w0 = frame.shape[:2]
     scale = process_width / float(w0)
-    frame = cv2.resize(frame, (process_width, int(h0*scale)))
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    new_h = int(h0*scale)
+    frame = np.array(img.resize((process_width, new_h)))
+    rgb = frame  # Already RGB
 
-    # Hand
+    # Hand detection
     if enable_hand:
         hand_result = hands.process(rgb)
         if hand_result.multi_hand_landmarks:
@@ -163,6 +186,7 @@ if camera_file:
                 gesture = detect_hand_gesture(fingers)
                 if gesture:
                     st.write(f"Detected Gesture: {gesture}")
-                    # enqueue_audio(GESTURE_SOUNDS.get(gesture))  # add audio paths
+                    # enqueue_audio(GESTURE_SOUNDS.get(gesture))
 
-    FRAME_WINDOW.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    # Placeholder display
+    FRAME_WINDOW.image(frame)
