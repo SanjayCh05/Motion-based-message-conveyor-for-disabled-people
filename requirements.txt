@@ -2,7 +2,7 @@
 streamlit==1.30.0
 
 # Video processing
-opencv-python-headless==4.8.1.78
+opencv-python==4.8.1.78
 mediapipe==0.10.21
 numpy==1.26.4
 
