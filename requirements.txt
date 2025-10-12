@@ -1,5 +1,5 @@
 # Core
-streamlit==1.38.0
+streamlit==1.30.0
 
 # Video processing
 opencv-python-headless==4.8.1.78
@@ -7,7 +7,7 @@ mediapipe==0.10.21
 numpy==1.26.4
 
 # Streamlit video component (WebRTC)
-streamlit-webrtc==0.47.1
+streamlit-webrtc==0.45.1
 
 
 
