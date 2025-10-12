@@ -1,12 +1,13 @@
-streamlit==1.30.0
-streamlit-webrtc==0.45.1
-opencv-python-headless==4.10.0.84
+streamlit==1.38.0
+streamlit-webrtc==0.47.1
+opencv-python-headless==4.8.1.78
 mediapipe==0.10.14
 numpy==1.26.4
-aiortc==1.7.3
-aioice==0.9.0
-av==11.0.0
-rich==13.9.4
+aiortc==1.13.0
+aioice==0.10.3
+av==14.4.0
+rich==14.2.0
+
 
 
 
