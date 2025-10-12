@@ -5,7 +5,6 @@ Unified Streamlit app: Head pose + Hand gestures + Blink detection
 - Pygame audio playback (background thread + queue)
 - Streamlit sidebar toggles (head/hand/blink/voice/sms)
 - Twilio SMS alerts (if enabled & credentials provided)
-- Threaded camera capture for better FPS
 """
 
 import cv2
@@ -59,9 +58,8 @@ st.sidebar.caption("Press 'Start Camera' to begin")
 run = st.sidebar.checkbox("🎥 Start Camera", value=False)
 
 # ----------------------------
-# Audio files (update paths on your system)
+# Audio files
 # ----------------------------
-# Head-pose audio
 AUDIO_PATHS = {
     "Up": r"C:\Users\Chintala sanjay\Downloads\Audios\bring water.mp3",
     "Down": r"C:\Users\Chintala sanjay\Downloads\Audios\emergency1.opus",
@@ -70,7 +68,6 @@ AUDIO_PATHS = {
     "Center": None
 }
 
-# Hand gesture audio mapping
 GESTURE_SOUNDS = {
     "Bring Water": r"C:\Users\Chintala sanjay\Downloads\Audios\bring_water.opus",
     "Emergency": r"C:\Users\Chintala sanjay\Downloads\Audios\emergency.mp3",
@@ -82,12 +79,11 @@ GESTURE_SOUNDS = {
     "Help me sit": r"C:\Users\Chintala sanjay\Downloads\Audios\check my supplies.mp3",
 }
 
-# Blink audio
 SINGLE_BLINK_AUDIO = r"C:\Users\Chintala sanjay\Downloads\Audios\call_for_caretaker.opus"
 DOUBLE_BLINK_AUDIO = r"C:\Users\Chintala sanjay\Downloads\Audios\need_help.opus"
 
 # ----------------------------
-# Parameters/thresholds
+# Thresholds / Params
 # ----------------------------
 EAR_THRESHOLD = 0.3
 CONSEC_FRAMES = 4
@@ -99,9 +95,8 @@ YAW_LEFT_THRESH = -10
 PITCH_UP_THRESH = -12
 PITCH_DOWN_THRESH = 12
 
-STABLE_TIME = 0.6  # seconds
+STABLE_TIME = 0.6
 BLINK_DEBOUNCE = 0.25
-
 FINGER_TIPS = [8, 12, 16, 20]
 
 # ----------------------------
@@ -128,64 +123,7 @@ face_mesh = mp_face_mesh.FaceMesh(
 )
 
 # ----------------------------
-# Threaded video capture
-# ----------------------------
-class VideoStream:
-    def __init__(self, src=0):
-        self.stream = cv2.VideoCapture(src)
-        if not self.stream.isOpened():
-            st.error("⚠️ Cannot open webcam. Check camera permissions or device index.")
-        self.ret, self.frame = self.stream.read()
-        self.stopped = False
-        self.lock = threading.Lock()
-        threading.Thread(target=self.update, daemon=True).start()
-
-    def update(self):
-        while not self.stopped:
-            ret, frame = self.stream.read()
-            if not ret:
-                continue
-            with self.lock:
-                self.ret = ret
-                self.frame = frame
-
-    def read(self):
-        with self.lock:
-            if self.frame is None:
-                return False, None
-            return self.ret, self.frame.copy()
-
-    def stop(self):
-        self.stopped = True
-        try:
-            self.stream.release()
-        except Exception:
-            pass
-
-# ----------------------------
-# Twilio helper
-# ----------------------------
-def send_sms_alert_twilio(message):
-    if not use_twilio:
-        return False
-    try:
-        from twilio.rest import Client
-    except Exception:
-        st.warning("Twilio library not installed. Run `pip install twilio` to enable SMS.")
-        return False
-    if not (tw_sid and tw_token and tw_from and tw_to):
-        st.warning("Twilio credentials or numbers missing — cannot send SMS.")
-        return False
-    try:
-        client = Client(tw_sid, tw_token)
-        client.messages.create(body=message, from_=tw_from, to=tw_to)
-        return True
-    except Exception as e:
-        st.error(f"Failed to send SMS: {e}")
-        return False
-
-# ----------------------------
-# Pygame audio queue + thread
+# Pygame audio setup
 # ----------------------------
 pygame_inited = False
 if use_voice:
@@ -217,8 +155,6 @@ def audio_worker():
                     pygame.mixer.music.play(loops=0)
                     while pygame.mixer.music.get_busy():
                         time.sleep(0.05)
-                else:
-                    print(f"[AUDIO] file not found: {path}")
         except Exception as e:
             print(f"[AUDIO ERROR] {e}")
         audio_queue.task_done()
@@ -229,12 +165,8 @@ if use_voice and pygame_inited:
     audio_thread.start()
 
 def enqueue_audio(path):
-    if not use_voice or not pygame_inited:
-        return
-    if path and os.path.exists(path):
-        audio_queue.put(path)
-    else:
-        audio_queue.put(None)
+    if use_voice and pygame_inited:
+        audio_queue.put(path if path and os.path.exists(path) else None)
 
 def stop_audio():
     if pygame_inited:
@@ -243,7 +175,7 @@ def stop_audio():
                 pygame.mixer.music.stop()
 
 # ----------------------------
-# Helpers (EAR, head pose, hand fingers)
+# Helpers (EAR, head pose, hand gestures)
 # ----------------------------
 LEFT_EYE = [33, 160, 158, 133, 153, 144]
 RIGHT_EYE = [362, 385, 387, 263, 373, 380]
@@ -253,9 +185,7 @@ def eye_aspect_ratio(landmarks, left_indices, right_indices):
         v1 = hypot(points[1][0] - points[5][0], points[1][1] - points[5][1])
         v2 = hypot(points[2][0] - points[4][0], points[2][1] - points[4][1])
         h = hypot(points[0][0] - points[3][0], points[0][1] - points[3][1])
-        if h == 0:
-            return 0.0
-        return (v1 + v2) / (2.0 * h)
+        return (v1 + v2) / (2.0 * h) if h != 0 else 0.0
     left = [(landmarks[i].x, landmarks[i].y) for i in left_indices]
     right = [(landmarks[i].x, landmarks[i].y) for i in right_indices]
     return (_ear(left) + _ear(right)) / 2.0
@@ -318,54 +248,38 @@ def get_direction_from_pose(yaw, pitch):
 def fingers_up(hand_landmarks):
     fingers = []
     try:
-        if hand_landmarks.landmark[4].x < hand_landmarks.landmark[3].x:
-            fingers.append(1)
-        else:
-            fingers.append(0)
+        fingers.append(1 if hand_landmarks.landmark[4].x < hand_landmarks.landmark[3].x else 0)
     except Exception:
         fingers.append(0)
     for tip in FINGER_TIPS:
         try:
-            if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[tip - 2].y:
-                fingers.append(1)
-            else:
-                fingers.append(0)
+            fingers.append(1 if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[tip - 2].y else 0)
         except Exception:
             fingers.append(0)
     return fingers
 
 def detect_hand_gesture(fingers):
-    if fingers == [0, 1, 0, 0, 0]:
-        return "Bring Water"
-    elif fingers == [0, 1, 1, 0, 0]:
-        return "Emergency"
-    elif fingers == [0, 0, 0, 0, 0]:
-        return "Stop"
-    elif fingers == [0, 1, 1, 1, 0]:
-        return "Assist me outside"
-    elif fingers == [0, 1, 1, 1, 1]:
-        return "Call 108"
-    elif fingers == [0, 0, 1, 1, 1]:
-        return "Contact my caregiver"
-    elif fingers == [0, 0, 0, 0, 1]:
-        return "Check my supplies"
-    elif fingers == [0, 0, 0, 1, 1]:
-        return "Help me sit"
-    else:
-        return None
+    mapping = {
+        (0,1,0,0,0): "Bring Water",
+        (0,1,1,0,0): "Emergency",
+        (0,0,0,0,0): "Stop",
+        (0,1,1,1,0): "Assist me outside",
+        (0,1,1,1,1): "Call 108",
+        (0,0,1,1,1): "Contact my caregiver",
+        (0,0,0,0,1): "Check my supplies",
+        (0,0,0,1,1): "Help me sit"
+    }
+    return mapping.get(tuple(fingers), None)
 
 # ----------------------------
-# State & smoothing
+# State variables
 # ----------------------------
 frame_times = deque(maxlen=30)
-
 head_last_detected = "Center"
 head_stable = "Center"
 head_detect_time = time.time()
-
 last_gesture = None
 gesture_last_time = 0
-
 blink_frame_counter = 0
 pending_blink_time = None
 total_blinks = 0
@@ -374,54 +288,44 @@ double_blink_events = 0
 long_blink_events = 0
 last_blink_event = None
 last_blink_event_time = 0
-
 yaw_q = deque(maxlen=5)
 pitch_q = deque(maxlen=5)
-
 last_command = None
 last_sms_time = 0
-sms_cooldown = 30  # seconds
+sms_cooldown = 30
 
 # ----------------------------
 # Streamlit placeholders
 # ----------------------------
 FRAME_WINDOW = st.image([])
 status_placeholder = st.empty()
-info_col, conf_col = st.columns([3, 1])
-fps_placeholder = conf_col.empty()
+fps_placeholder = st.empty()
 
 # ----------------------------
-# Main loop
+# Main loop using st.camera_input()
 # ----------------------------
-vs = None
-if run:
-    vs = VideoStream(0)
-    st.success("✅ Camera started")
-else:
-    st.warning("⏸️ Camera is stopped")
-
 try:
     while run:
         loop_start = time.time()
-        ret, frame = vs.read()
-        if not ret or frame is None:
+        img_file_buffer = st.camera_input("Camera Feed", key="camera")
+        if img_file_buffer is None:
             status_placeholder.error("⚠️ No camera frame available.")
             time.sleep(0.1)
             continue
 
-        # Resize for speed
+        file_bytes = np.asarray(bytearray(img_file_buffer.read()), dtype=np.uint8)
+        frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+        # Resize and normalize
         h0, w0 = frame.shape[:2]
         scale = process_width / float(w0)
         frame = cv2.resize(frame, (process_width, int(h0 * scale)))
         h, w = frame.shape[:2]
-
-        # Mild lighting normalization
         frame = cv2.convertScaleAbs(frame, alpha=1.05, beta=8)
-
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         command = None
 
-        # Run mediapipe detectors based on toggles
+        # Detection logic: hands, face, blink, head
         hand_result = hands.process(rgb) if enable_hand else None
         face_result = face_mesh.process(rgb) if (enable_eye or enable_head) else None
 
@@ -431,81 +335,59 @@ try:
                 mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
                 fingers = fingers_up(hand_landmarks)
                 g = detect_hand_gesture(fingers)
-                if g:
-                    if g != last_gesture:
-                        last_gesture = g
-                        gesture_last_time = time.time()
-                        if use_voice and g in GESTURE_SOUNDS and os.path.exists(GESTURE_SOUNDS[g]):
-                            enqueue_audio(GESTURE_SOUNDS[g])
-                        if use_twilio and g.lower().startswith("emergency"):
-                            if time.time() - last_sms_time > sms_cooldown:
-                                sent = send_sms_alert_twilio(f"⚠️ Emergency Gesture detected: {g}")
-                                if sent:
-                                    last_sms_time = time.time()
+                if g and g != last_gesture:
+                    last_gesture = g
+                    gesture_last_time = time.time()
+                    enqueue_audio(GESTURE_SOUNDS.get(g, None))
                     command = g
-        else:
-            last_gesture = None
 
         # --- Face/Eye/Head Detection ---
         if (enable_eye or enable_head) and face_result and face_result.multi_face_landmarks:
             landmarks = face_result.multi_face_landmarks[0].landmark
 
-            # Eye / Blink detection
+            # Blink detection
             if enable_eye:
                 ear = eye_aspect_ratio(landmarks, LEFT_EYE, RIGHT_EYE)
-                ear_sm = ear
-                if ear_sm < EAR_THRESHOLD and (time.time() - loop_start) > 0:
+                if ear < EAR_THRESHOLD:
                     blink_frame_counter += 1
                 else:
                     if blink_frame_counter >= CONSEC_FRAMES:
-                        duration = blink_frame_counter / (1.0)
+                        duration = blink_frame_counter / 1.0
                         now = time.time()
                         if duration >= LONG_BLINK_SECONDS:
                             long_blink_events += 1
                             total_blinks += 1
                             last_blink_event = "Long Blink"
                             last_blink_event_time = now
-                            if use_voice and SINGLE_BLINK_AUDIO and os.path.exists(SINGLE_BLINK_AUDIO):
-                                enqueue_audio(SINGLE_BLINK_AUDIO)
+                            enqueue_audio(SINGLE_BLINK_AUDIO)
                         else:
                             if pending_blink_time is None:
-                                pending_blink_time = time.time()
+                                pending_blink_time = now
                             else:
-                                if time.time() - pending_blink_time <= DOUBLE_BLINK_MAX_INTERVAL:
+                                if now - pending_blink_time <= DOUBLE_BLINK_MAX_INTERVAL:
                                     double_blink_events += 1
                                     total_blinks += 2
                                     last_blink_event = "Double Blink"
-                                    last_blink_event_time = time.time()
+                                    last_blink_event_time = now
                                     pending_blink_time = None
-                                    if use_voice and DOUBLE_BLINK_AUDIO and os.path.exists(DOUBLE_BLINK_AUDIO):
-                                        enqueue_audio(DOUBLE_BLINK_AUDIO)
+                                    enqueue_audio(DOUBLE_BLINK_AUDIO)
                                 else:
                                     single_blink_events += 1
                                     total_blinks += 1
                                     last_blink_event = "Single Blink"
-                                    last_blink_event_time = time.time()
-                                    pending_blink_time = time.time()
-                                    if use_voice and SINGLE_BLINK_AUDIO and os.path.exists(SINGLE_BLINK_AUDIO):
-                                        enqueue_audio(SINGLE_BLINK_AUDIO)
+                                    last_blink_event_time = now
+                                    pending_blink_time = now
+                                    enqueue_audio(SINGLE_BLINK_AUDIO)
                     blink_frame_counter = 0
 
-                if pending_blink_time is not None and (time.time() - pending_blink_time) > DOUBLE_BLINK_MAX_INTERVAL:
-                    single_blink_events += 1
-                    total_blinks += 1
-                    last_blink_event = "Single Blink"
-                    last_blink_event_time = time.time()
-                    if use_voice and SINGLE_BLINK_AUDIO and os.path.exists(SINGLE_BLINK_AUDIO):
-                        enqueue_audio(SINGLE_BLINK_AUDIO)
-                    pending_blink_time = None
-
-            # Head pose
+            # Head pose detection
             if enable_head:
                 yaw, pitch, roll = get_head_pose(landmarks, w, h)
                 if yaw is not None:
                     yaw_q.append(yaw)
                     pitch_q.append(pitch)
-                    smooth_yaw = float(np.median(list(yaw_q))) if len(yaw_q) > 0 else yaw
-                    smooth_pitch = float(np.median(list(pitch_q))) if len(pitch_q) > 0 else pitch
+                    smooth_yaw = float(np.median(list(yaw_q)))
+                    smooth_pitch = float(np.median(list(pitch_q)))
                     detected_dir = get_direction_from_pose(smooth_yaw, smooth_pitch)
                     if detected_dir != head_last_detected:
                         head_last_detected = detected_dir
@@ -514,72 +396,42 @@ try:
                         if (time.time() - head_detect_time) > STABLE_TIME:
                             if head_stable != detected_dir:
                                 head_stable = detected_dir
-                                if use_voice and head_stable in AUDIO_PATHS and AUDIO_PATHS[head_stable]:
-                                    enqueue_audio(AUDIO_PATHS[head_stable])
-                                if use_twilio and head_stable == "Down":
-                                    if time.time() - last_sms_time > sms_cooldown:
-                                        sent = send_sms_alert_twilio(f"⚠️ Emergency Head Pose: {head_stable}")
-                                        if sent:
-                                            last_sms_time = time.time()
-                    cv2.putText(frame, f"Yaw:{int(smooth_yaw)} Pitch:{int(smooth_pitch)}", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                    cv2.putText(frame, f"HeadDir:{head_stable}", (10, 60),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                                enqueue_audio(AUDIO_PATHS.get(head_stable, None))
+                    cv2.putText(frame, f"Yaw:{int(smooth_yaw)} Pitch:{int(smooth_pitch)}", (10,30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+                    cv2.putText(frame, f"HeadDir:{head_stable}", (10,60),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
 
         # Display command/blink
         y_text = 100
         if command:
-            cv2.putText(frame, f"{command}", (10, y_text), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 3)
+            cv2.putText(frame, f"{command}", (10, y_text), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,0,255),3)
             y_text += 40
         if last_blink_event and (time.time() - last_blink_event_time) < 2.0:
-            cv2.putText(frame, last_blink_event, (10, y_text), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 200, 0), 3)
+            cv2.putText(frame, last_blink_event, (10, y_text), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,200,0),3)
             y_text += 30
 
-        cv2.putText(frame, f"Total blinks: {total_blinks}", (10, h - 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+        cv2.putText(frame, f"Total blinks: {total_blinks}", (10,h-50),
+                    cv2.FONT_HERSHEY_SIMPLEX,0.7,(200,200,200),2)
         cv2.putText(frame, f"Singles:{single_blink_events} Doubles:{double_blink_events} Longs:{long_blink_events}",
-                    (10, h - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 2)
+                    (10,h-25), cv2.FONT_HERSHEY_SIMPLEX,0.6,(180,180,180),2)
 
         # FPS
-        frame_times.append(time.time() - loop_start)
-        fps = 1.0 / (sum(frame_times) / len(frame_times)) if len(frame_times) > 0 else 0.0
+        frame_times.append(time.time()-loop_start)
+        fps = 1.0 / (sum(frame_times)/len(frame_times)) if frame_times else 0.0
         fps_placeholder.metric("FPS", f"{fps:.1f}")
 
-        # Streamlit display
         FRAME_WINDOW.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-
-        time.sleep(0.01)
+        elapsed = time.time() - loop_start
+        if elapsed < 0.03:
+            time.sleep(0.03 - elapsed)
 
 except Exception as e:
     st.error(f"Error in main loop: {e}")
+
 finally:
-    # Clean up resources safely for headless environments (Streamlit Cloud)
-    if vs is not None:
-        try:
-            vs.stop()
-        except Exception:
-            pass
-
-    # Stop audio playback
-    try:
-        stop_audio()
-    except Exception:
-        pass
-
-    # Signal audio thread to stop and join (if present)
-    try:
-        if audio_thread is not None:
-            audio_queue.put(None)
-            audio_thread.join(timeout=0.5)
-    except Exception:
-        pass
-
-    # cv2 GUI functions are not available on headless servers.
-    # Wrap destroyAllWindows in try/except so it won't crash in Streamlit Cloud.
-    try:
-        cv2.destroyAllWindows()
-    except Exception:
-        # On headless servers this will raise; ignore safely.
-        pass
-
+    stop_audio()
+    if audio_thread:
+        audio_queue.put(None)
+        audio_thread.join(timeout=0.5)
     st.info("Stopped")
