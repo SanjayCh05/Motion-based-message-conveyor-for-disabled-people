@@ -1,60 +1,25 @@
-# streamlit_unified_headless.py
-"""
-Headless Streamlit App:
-- Hand gestures, head pose, blink detection
-- st.camera_input instead of cv2.VideoCapture
-- Pygame audio playback
-- Twilio SMS alerts
-"""
-
+# streamlit_webrtc_unified.py
 import streamlit as st
-from PIL import Image
+import cv2
 import numpy as np
-
 import mediapipe as mp
-import pygame
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+from math import hypot
 import threading
+import pygame
 import time
 import os
-from math import hypot
 from queue import Queue
-from collections import deque
-
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-st.set_page_config(page_title="Unified Gesture/Head/Blink Detection", layout="wide")
-st.title("🧠 Unified: Hand + Head + Blink Detection (Headless)")
-
-# Sidebar toggles
-st.sidebar.header("Modules")
-enable_hand = st.sidebar.checkbox("Enable Hand Detection", True)
-enable_eye = st.sidebar.checkbox("Enable Blink Detection", True)
-enable_head = st.sidebar.checkbox("Enable Head Pose Detection", True)
-
-st.sidebar.header("Audio / Alerts")
-use_voice = st.sidebar.checkbox("Enable Voice Playback (pygame)", True)
-use_twilio = st.sidebar.checkbox("Enable SMS Alerts (Twilio)", False)
-tw_sid = st.sidebar.text_input("Twilio SID")
-tw_token = st.sidebar.text_input("Twilio Auth Token", type="password")
-tw_from = st.sidebar.text_input("From (Twilio number)")
-tw_to = st.sidebar.text_input("Caregiver number (+countrycode)")
-
-st.sidebar.header("Performance")
-process_width = st.sidebar.slider("Process width (px)", 320, 1280, 640, 64)
-model_complexity = st.sidebar.selectbox("Hand model complexity", [0,1,2], 0)
-refine_landmarks = st.sidebar.checkbox("Refine face landmarks", False)
 
 # ----------------------------
 # Audio setup
 # ----------------------------
 pygame_inited = False
-if use_voice:
-    try:
-        pygame.mixer.init()
-        pygame_inited = True
-    except:
-        st.warning("Pygame mixer init failed")
+try:
+    pygame.mixer.init()
+    pygame_inited = True
+except:
+    st.warning("Pygame mixer init failed")
 
 audio_queue = Queue()
 audio_lock = threading.Lock() if pygame_inited else None
@@ -78,11 +43,11 @@ def audio_worker():
                 print(f"[AUDIO ERROR] {e}")
         audio_queue.task_done()
 
-if use_voice and pygame_inited:
+if pygame_inited:
     threading.Thread(target=audio_worker, daemon=True).start()
 
 def enqueue_audio(path):
-    if use_voice and pygame_inited:
+    if pygame_inited:
         audio_queue.put(path)
 
 # ----------------------------
@@ -93,51 +58,23 @@ mp_face_mesh = mp.solutions.face_mesh
 mp_draw = mp.solutions.drawing_utils
 
 hands = mp_hands.Hands(
-    static_image_mode=False,
     max_num_hands=1,
-    model_complexity=model_complexity,
+    model_complexity=1,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5,
 )
 
 face_mesh = mp_face_mesh.FaceMesh(
-    static_image_mode=False,
     max_num_faces=1,
-    refine_landmarks=refine_landmarks,
+    refine_landmarks=False,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5,
 )
 
 # ----------------------------
-# Helper constants
-# ----------------------------
-LEFT_EYE = [33, 160, 158, 133, 153, 144]
-RIGHT_EYE = [362, 385, 387, 263, 373, 380]
-FINGER_TIPS = [8, 12, 16, 20]
-
-EAR_THRESHOLD = 0.3
-CONSEC_FRAMES = 4
-LONG_BLINK_SECONDS = 2.0
-DOUBLE_BLINK_MAX_INTERVAL = 0.8
-
-YAW_RIGHT_THRESH = 10
-YAW_LEFT_THRESH = -10
-PITCH_UP_THRESH = -12
-PITCH_DOWN_THRESH = 12
-STABLE_TIME = 0.6
-
-# ----------------------------
 # Helpers
 # ----------------------------
-def eye_aspect_ratio(landmarks, left_indices, right_indices):
-    def _ear(points):
-        v1 = hypot(points[1][0]-points[5][0], points[1][1]-points[5][1])
-        v2 = hypot(points[2][0]-points[4][0], points[2][1]-points[4][1])
-        h = hypot(points[0][0]-points[3][0], points[0][1]-points[3][1])
-        return (v1+v2)/(2.0*h) if h != 0 else 0
-    left = [(landmarks[i].x, landmarks[i].y) for i in left_indices]
-    right = [(landmarks[i].x, landmarks[i].y) for i in right_indices]
-    return (_ear(left)+_ear(right))/2.0
+FINGER_TIPS = [8, 12, 16, 20]
 
 def fingers_up(hand_landmarks):
     fingers = [1 if hand_landmarks.landmark[4].x < hand_landmarks.landmark[3].x else 0]
@@ -162,32 +99,39 @@ def detect_hand_gesture(fingers):
     return gestures.get(tuple(fingers))
 
 # ----------------------------
-# Streamlit camera input
+# Video Transformer
 # ----------------------------
-FRAME_WINDOW = st.image([])
+class VideoTransformer(VideoTransformerBase):
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-camera_file = st.camera_input("Start your webcam")
-if camera_file:
-    img = Image.open(camera_file)
-    frame = np.array(img)  # RGB format
-    # Resize
-    h0, w0 = frame.shape[:2]
-    scale = process_width / float(w0)
-    new_h = int(h0*scale)
-    frame = np.array(img.resize((process_width, new_h)))
-    rgb = frame  # Already RGB
-
-    # Hand detection
-    if enable_hand:
+        # Hand detection
         hand_result = hands.process(rgb)
         if hand_result.multi_hand_landmarks:
             for hand_landmarks in hand_result.multi_hand_landmarks:
-                mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                mp_draw.draw_landmarks(img, hand_landmarks, mp_hands.HAND_CONNECTIONS)
                 fingers = fingers_up(hand_landmarks)
                 gesture = detect_hand_gesture(fingers)
                 if gesture:
-                    st.write(f"Detected Gesture: {gesture}")
+                    cv2.putText(img, f"Gesture: {gesture}", (10,50),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
                     # enqueue_audio(GESTURE_SOUNDS.get(gesture))
 
-    # Placeholder display
-    FRAME_WINDOW.image(frame)
+        # Face mesh detection (optional: add blink/head pose here)
+        face_result = face_mesh.process(rgb)
+        if face_result.multi_face_landmarks:
+            for face_landmarks in face_result.multi_face_landmarks:
+                mp_draw.draw_landmarks(img, face_landmarks, mp_face_mesh.FACEMESH_TESSELATION)
+
+        return img
+
+# ----------------------------
+# Streamlit WebRTC streamer
+# ----------------------------
+st.title("🧠 Unified Real-time Detection")
+webrtc_streamer(
+    key="example",
+    video_transformer_factory=VideoTransformer,
+    media_stream_constraints={"video": True, "audio": False},
+)
