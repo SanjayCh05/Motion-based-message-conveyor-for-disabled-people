@@ -1,34 +1,28 @@
 import streamlit as st
-
-# =========================================================
-# 0. STREAMLIT CONFIG (MUST BE THE FIRST STREAMLIT COMMAND)
-# =========================================================
-# Fixes the StreamlitAPIException by ensuring this is the first command.
-st.set_page_config(page_title="Unified Caregiver Instruction System (No Audio)", layout="wide")
-st.title("🧠 Unified Real-time Detection System for Caregiver Instructions")
-st.markdown("""
-This system uses **Hand Gestures**, **Head Pose**, and **Blink Patterns** to trigger instructions for paralytic people.
-**NOTE: Audio features have been removed for improved cloud deployment stability.**
-
----
-**Detection Status:**
-* **Hand Gestures:** Standard hand signs (e.g., index finger up).
-* **Head Pose:** Stabilized detection after holding a direction (Up/Down/Left/Right) for **0.5 seconds**.
-* **Blinks:** Tracks Single Blinks and commands are triggered by a **Double Blink** (two quick blinks).
-""")
-
-# =========================================================
-# 1. IMPORTS & INITIAL SETUP
-# =========================================================
 import cv2
 import numpy as np
 import mediapipe as mp
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import time
-from math import hypot # Not strictly needed here, but kept if you use distance checks
 
 # =========================================================
-# 2. MEDIAPIPE & CONSTANTS SETUP
+# 0. STREAMLIT CONFIG (MUST BE THE FIRST STREAMLIT COMMAND)
+# =========================================================
+st.set_page_config(page_title="Unified Caregiver Instruction System", layout="wide")
+st.title("🧠 Unified Real-time Detection System for Caregiver Instructions (No Audio)")
+st.markdown("""
+This system uses **Hand Gestures**, **Head Pose**, and **Blink Patterns** for non-verbal communication.
+
+---
+**Detection Status:**
+* **Hand Gestures:** Standard hand signs (e.g., index finger up).
+* **Head Pose:** Stabilized detection after holding a direction for **0.5 seconds**.
+* **Blinks:** Commands are triggered by a **Double Blink**.
+""")
+
+
+# =========================================================
+# 1. MEDIAPIPE & CONSTANTS SETUP
 # =========================================================
 mp_draw = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -58,13 +52,14 @@ DOUBLE_BLINK_MAX_INTERVAL = 0.8
 FINGER_TIPS = [8, 12, 16, 20] 
 
 # =========================================================
-# 3. HELPER FUNCTIONS
+# 2. HELPER FUNCTIONS
 # =========================================================
 
 # --- Hand Gesture Helpers ---
 def fingers_up(hand_landmarks):
-    # This simplified logic assumes the user is using the camera-facing hand.
+    # This logic checks if the tip (4) is further left than the joint (3) for an upward-facing hand
     fingers = [1 if hand_landmarks.landmark[4].x < hand_landmarks.landmark[3].x else 0]
+    # Check if tip is higher (lower Y value) than the joint below it
     for tip in FINGER_TIPS:
         fingers.append(1 if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[tip - 2].y else 0)
     return fingers
@@ -72,19 +67,16 @@ def fingers_up(hand_landmarks):
 def detect_gesture(fingers):
     # Maps finger state [Thumb, Index, Middle, Ring, Pinky] to instruction
     gestures = {
-        (0, 1, 0, 0, 0): "Bring Water",
-        (0, 1, 1, 0, 0): "Emergency",
-        (0, 0, 0, 0, 0): "Stop",
-        (0, 1, 1, 1, 0): "Assist me outside",
-        (0, 1, 1, 1, 1): "Call 108",
-        (0, 0, 1, 1, 1): "Contact my caregiver",
-        (0, 0, 0, 0, 1): "Check my supplies",
+        (0, 1, 0, 0, 0): "Bring Water", (0, 1, 1, 0, 0): "Emergency", (0, 0, 0, 0, 0): "Stop",
+        (0, 1, 1, 1, 0): "Assist me outside", (0, 1, 1, 1, 1): "Call 108",
+        (0, 0, 1, 1, 1): "Contact my caregiver", (0, 0, 0, 0, 1): "Check my supplies",
         (0, 0, 0, 1, 1): "Help me sit"
     }
     return gestures.get(tuple(fingers))
 
 # --- Head Pose Helpers ---
 def get_head_pose(landmarks, img_w, img_h):
+    # ... [Head Pose logic remains the same] ...
     image_points = np.array([
         (landmarks[idx].x * img_w, landmarks[idx].y * img_h) for idx in FACE_LANDMARK_POINTS
     ], dtype="double")
@@ -128,7 +120,7 @@ def eye_aspect_ratio(eye_landmarks_indices, face_landmarks):
     return (A + B) / (2.0 * C) if C != 0 else 0.0
 
 # =========================================================
-# 4. VIDEO TRANSFORMER CLASS (Unified Logic)
+# 3. VIDEO TRANSFORMER CLASS (Unified Logic)
 # =========================================================
 class UnifiedVideoTransformer(VideoTransformerBase):
     def __init__(self):
@@ -156,19 +148,16 @@ class UnifiedVideoTransformer(VideoTransformerBase):
         current_gesture = None
         if hand_result.multi_hand_landmarks:
             for hand_landmarks in hand_result.multi_hand_landmarks:
-                # Draw hand landmarks
                 mp_draw.draw_landmarks(img, hand_landmarks, mp_hands.HAND_CONNECTIONS)
                 fingers = fingers_up(hand_landmarks)
                 current_gesture = detect_gesture(fingers)
                 
-        # Display for Hand Gesture
         if current_gesture and current_gesture != self.last_gesture:
             self.last_gesture = current_gesture
         elif not current_gesture:
             self.last_gesture = None
             
         if current_gesture:
-            # Display instruction in Blue
             cv2.putText(img, f"Hand: {current_gesture}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
         
         # --- FACE MESH, HEAD POSE, AND BLINK DETECTION ---
@@ -177,7 +166,6 @@ class UnifiedVideoTransformer(VideoTransformerBase):
         if face_result.multi_face_landmarks:
             landmarks = face_result.multi_face_landmarks[0].landmark
             
-            # Draw Face Mesh
             mp_draw.draw_landmarks(img, face_result.multi_face_landmarks[0], mp_face_mesh.FACEMESH_CONTOURS)
             
             # 1. HEAD POSE LOGIC
@@ -186,17 +174,14 @@ class UnifiedVideoTransformer(VideoTransformerBase):
                 detected_direction = get_head_direction(yaw, pitch)
                 current_time = time.time()
                 
-                # Stabilization Logic
                 if detected_direction != self.last_detected_direction:
                     self.last_detected_direction = detected_direction
                     self.direction_start_time = current_time
                 else:
                     if current_time - self.direction_start_time > HEAD_STABLE_TIME:
-                        self.stable_direction = detected_direction # Direction is stable
+                        self.stable_direction = detected_direction 
 
-                # Display Instruction Text
                 instruction_text = get_head_instruction(self.stable_direction)
-                # Display instruction in Red
                 cv2.putText(img, f"Head: {instruction_text}", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
             
             
@@ -216,7 +201,7 @@ class UnifiedVideoTransformer(VideoTransformerBase):
                     if self.last_event == "Single Blink" and (current_time_for_blink - self.last_event_time) < DOUBLE_BLINK_MAX_INTERVAL: 
                         self.double_blink_counter += 1
                         event_detected = "Double Blink (COMMAND)"
-                        self.last_event = None # Reset for next cycle
+                        self.last_event = None
                     elif self.last_event is None:
                         event_detected = "Single Blink"
                         self.last_event = event_detected
@@ -229,7 +214,6 @@ class UnifiedVideoTransformer(VideoTransformerBase):
                 self.blink_counter = 0
 
             # Display Blink Status
-            # Display instruction in Yellow
             cv2.putText(img, f"Double Blinks: {self.double_blink_counter}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
             if self.last_event:
                 cv2.putText(img, f"Last Event: {self.last_event}", (10, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
@@ -237,12 +221,11 @@ class UnifiedVideoTransformer(VideoTransformerBase):
         return img
 
 # =========================================================
-# 5. STREAMLIT WEBRTC CALL
+# 4. STREAMLIT WEBRTC CALL
 # =========================================================
 
-# The WebRTC component runs the video stream and uses the class above
 webrtc_streamer(
     key="unified_detection_system",
     video_transformer_factory=UnifiedVideoTransformer,
-    media_stream_constraints={"video": True, "audio": False}, # Ensure audio is false
+    media_stream_constraints={"video": True, "audio": False},
 )
