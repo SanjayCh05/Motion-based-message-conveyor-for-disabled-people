@@ -553,11 +553,33 @@ try:
 except Exception as e:
     st.error(f"Error in main loop: {e}")
 finally:
+    # Clean up resources safely for headless environments (Streamlit Cloud)
     if vs is not None:
-        vs.stop()
-    stop_audio()
-    if audio_thread is not None:
-        audio_queue.put(None)
-        audio_thread.join(timeout=0.5)
-    cv2.destroyAllWindows()
+        try:
+            vs.stop()
+        except Exception:
+            pass
+
+    # Stop audio playback
+    try:
+        stop_audio()
+    except Exception:
+        pass
+
+    # Signal audio thread to stop and join (if present)
+    try:
+        if audio_thread is not None:
+            audio_queue.put(None)
+            audio_thread.join(timeout=0.5)
+    except Exception:
+        pass
+
+    # cv2 GUI functions are not available on headless servers.
+    # Wrap destroyAllWindows in try/except so it won't crash in Streamlit Cloud.
+    try:
+        cv2.destroyAllWindows()
+    except Exception:
+        # On headless servers this will raise; ignore safely.
+        pass
+
     st.info("Stopped")
