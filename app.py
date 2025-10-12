@@ -1,5 +1,6 @@
 import os
-os.environ['ALSA_LOG_LEVEL'] = '0'  # suppress ALSA warnings
+# Suppress ALSA warnings that appear in cloud logs but are harmless
+os.environ['ALSA_LOG_LEVEL'] = '0' 
 
 import streamlit as st
 import cv2
@@ -11,21 +12,20 @@ import time
 # =========================================================
 # 0. STREAMLIT CONFIG (MUST BE THE FIRST STREAMLIT COMMAND)
 # =========================================================
-if __name__ == "__main__":
-    st.set_page_config(page_title="Unified Caregiver Instruction System", layout="wide")
-    st.title("🧠 Unified Real-time Detection System for Caregiver Instructions (No Audio)")
-    st.markdown("""
-    This system uses **Hand Gestures**, **Head Pose**, and **Blink Patterns** for non-verbal communication.
+st.set_page_config(page_title="Unified Caregiver Instruction System", layout="wide")
+st.title("🧠 Unified Real-time Detection System for Caregiver Instructions (No Audio)")
+st.markdown("""
+This system uses **Hand Gestures**, **Head Pose**, and **Blink Patterns** for non-verbal communication.
 
-    ---
-    **Detection Status:**
-    * **Hand Gestures:** Standard hand signs (e.g., index finger up).
-    * **Head Pose:** Stabilized detection after holding a direction for **0.5 seconds**.
-    * **Blinks:** Commands are triggered by a **Double Blink**.
-    """)
+---
+**Detection Status:**
+* **Hand Gestures:** Standard hand signs (e.g., index finger up).
+* **Head Pose:** Stabilized detection after holding a direction for **0.5 seconds**.
+* **Blinks:** Commands are triggered by a **Double Blink**.
+""")
 
 # =========================================================
-# 1. MEDIAPIPE & CONSTANTS SETUP
+# 1. CONSTANTS & MEDIAPIPE SETUP (Models initialized in __init__)
 # =========================================================
 mp_draw = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -52,8 +52,9 @@ DOUBLE_BLINK_MAX_INTERVAL = 0.8
 FINGER_TIPS = [8, 12, 16, 20] 
 
 # =========================================================
-# 2. HELPER FUNCTIONS
+# 2. HELPER FUNCTIONS (No changes)
 # =========================================================
+
 def fingers_up(hand_landmarks):
     fingers = [1 if hand_landmarks.landmark[4].x < hand_landmarks.landmark[3].x else 0]
     for tip in FINGER_TIPS:
@@ -111,27 +112,32 @@ def eye_aspect_ratio(eye_landmarks_indices, face_landmarks):
     C = np.linalg.norm(get_coords(eye_landmarks_indices[0]) - get_coords(eye_landmarks_indices[3]))
     return (A + B) / (2.0 * C) if C != 0 else 0.0
 
+
 # =========================================================
-# 3. VIDEO TRANSFORMER CLASS (Unified Logic)
+# 3. VIDEO TRANSFORMER CLASS (With close() method)
 # =========================================================
 class UnifiedVideoTransformer(VideoTransformerBase):
     def __init__(self):
-        # MediaPipe models (lazy-load)
-        self.hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7, min_tracking_confidence=0.5)
-        self.face_mesh = mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.6)
+        # MediaPipe models initialized here
+        self.hands = mp_hands.Hands(
+            max_num_hands=1, 
+            min_detection_confidence=0.6,
+            min_tracking_confidence=0.5
+        )
+        self.face_mesh = mp_face_mesh.FaceMesh(
+            max_num_faces=1, 
+            refine_landmarks=False, # Optimized for cloud performance
+            min_detection_confidence=0.6
+        )
 
-        # Head Pose State
+        # State Variables
         self.stable_direction = "Center"
         self.last_detected_direction = "Center"
         self.direction_start_time = time.time()
-        
-        # Blink Counting State
         self.blink_counter = 0 
         self.double_blink_counter = 0 
         self.last_event = None 
         self.last_event_time = 0.0
-        
-        # Hand Gesture State
         self.last_gesture = None
 
     def transform(self, frame):
@@ -139,7 +145,9 @@ class UnifiedVideoTransformer(VideoTransformerBase):
         img_h, img_w, _ = img.shape
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        # --- HAND GESTURE DETECTION ---
+        # --- DETECTION LOGIC (Same as before) ---
+        
+        # Hand Detection
         hand_result = self.hands.process(rgb)
         current_gesture = None
         if hand_result.multi_hand_landmarks:
@@ -156,14 +164,14 @@ class UnifiedVideoTransformer(VideoTransformerBase):
         if current_gesture:
             cv2.putText(img, f"Hand: {current_gesture}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
         
-        # --- FACE MESH, HEAD POSE, AND BLINK DETECTION ---
+        # Face Mesh, Head Pose, and Blink Detection
         face_result = self.face_mesh.process(rgb)
         
         if face_result.multi_face_landmarks:
             landmarks = face_result.multi_face_landmarks[0].landmark
             mp_draw.draw_landmarks(img, face_result.multi_face_landmarks[0], mp_face_mesh.FACEMESH_CONTOURS)
             
-            # 1. HEAD POSE LOGIC
+            # Head Pose
             yaw, pitch = get_head_pose(landmarks, img_w, img_h)
             if yaw is not None:
                 detected_direction = get_head_direction(yaw, pitch)
@@ -179,7 +187,7 @@ class UnifiedVideoTransformer(VideoTransformerBase):
                 instruction_text = get_head_instruction(self.stable_direction)
                 cv2.putText(img, f"Head: {instruction_text}", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
             
-            # 2. BLINK DETECTION LOGIC
+            # Blink Detection
             right_ear = eye_aspect_ratio(RIGHT_EYE_EAR_INDICES, landmarks)
             left_ear = eye_aspect_ratio(LEFT_EYE_EAR_INDICES, landmarks)
             avg_ear = (right_ear + left_ear) / 2.0
@@ -189,15 +197,18 @@ class UnifiedVideoTransformer(VideoTransformerBase):
             else:
                 if self.blink_counter >= CONSEC_FRAMES:
                     current_time_for_blink = time.time()
+                    
                     if self.last_event == "Single Blink" and (current_time_for_blink - self.last_event_time) < DOUBLE_BLINK_MAX_INTERVAL: 
                         self.double_blink_counter += 1
-                        self.last_event = None
-                    elif self.last_event is None:
+                        self.last_event = "Double Blink (COMMAND)"
+                    elif self.last_event is None or self.last_event.startswith("Double Blink"):
                         self.last_event = "Single Blink"
                         self.last_event_time = current_time_for_blink
+                    
                     self.blink_counter = 0
                 elif self.last_event == "Single Blink" and (time.time() - self.last_event_time) >= DOUBLE_BLINK_MAX_INTERVAL:
                     self.last_event = None
+                
                 self.blink_counter = 0
 
             cv2.putText(img, f"Double Blinks: {self.double_blink_counter}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
@@ -206,12 +217,20 @@ class UnifiedVideoTransformer(VideoTransformerBase):
 
         return img
 
+    def close(self):
+        """CRITICAL: Release MediaPipe resources when the stream closes."""
+        self.hands.close()
+        self.face_mesh.close()
+
+
 # =========================================================
 # 4. STREAMLIT WEBRTC CALL
 # =========================================================
-if __name__ == "__main__":
-    webrtc_streamer(
-        key="unified_detection_system",
-        video_transformer_factory=UnifiedVideoTransformer,
-        media_stream_constraints={"video": True, "audio": False},
-    )
+
+webrtc_streamer(
+    key="unified_detection_system",
+    video_transformer_factory=UnifiedVideoTransformer,
+    media_stream_constraints={"video": True, "audio": False},
+    # The image shows the video element is being created and destroyed, suggesting a timeout.
+    # We are keeping the performance fixes from the last step (refine_landmarks=False)
+)
