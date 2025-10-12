@@ -1,19 +1,13 @@
-# Streamlit & WebRTC
 streamlit==1.38.0
 streamlit-webrtc==0.47.1
-
-# Computer vision & face/hand detection
 opencv-python-headless==4.8.1.78
 mediapipe==0.10.14
 numpy==1.26.4
-
-# WebRTC dependencies (compatible with Python 3.11)
 aiortc==1.13.0
-aioice==0.9.0
+aioice==0.10.3
 av==14.2.0
-
-# Logging/visualization
 rich==13.9.4
+
 
 
 
