@@ -13,19 +13,16 @@ import time
 # 0. STREAMLIT CONFIG (MUST BE THE FIRST STREAMLIT COMMAND)
 # =========================================================
 st.set_page_config(page_title="Unified Caregiver Instruction System", layout="wide")
-st.title("🧠 Unified Real-time Detection System for Caregiver Instructions (No Audio)")
+st.title("🧠 Unified Real-time Detection System for Caregiver Instructions (Optimized)")
 st.markdown("""
 This system uses **Hand Gestures**, **Head Pose**, and **Blink Patterns** for non-verbal communication.
 
 ---
-**Detection Status:**
-* **Hand Gestures:** Standard hand signs (e.g., index finger up).
-* **Head Pose:** Stabilized detection after holding a direction for **0.5 seconds**.
-* **Blinks:** Commands are triggered by a **Double Blink**.
+**Current Status:** Optimized for Streamlit Cloud performance by using the lightest computer vision models.
 """)
 
 # =========================================================
-# 1. CONSTANTS & MEDIAPIPE SETUP (Models initialized in __init__)
+# 1. CONSTANTS & MEDIAPIPE SETUP
 # =========================================================
 mp_draw = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -52,7 +49,8 @@ DOUBLE_BLINK_MAX_INTERVAL = 0.8
 FINGER_TIPS = [8, 12, 16, 20] 
 
 # =========================================================
-# 2. HELPER FUNCTIONS (No changes)
+# 2. HELPER FUNCTIONS 
+# (No changes needed here)
 # =========================================================
 
 def fingers_up(hand_landmarks):
@@ -114,20 +112,21 @@ def eye_aspect_ratio(eye_landmarks_indices, face_landmarks):
 
 
 # =========================================================
-# 3. VIDEO TRANSFORMER CLASS (With close() method)
+# 3. VIDEO TRANSFORMER CLASS 
 # =========================================================
 class UnifiedVideoTransformer(VideoTransformerBase):
     def __init__(self):
-        # MediaPipe models initialized here
+        # MediaPipe models initialized here with performance settings
         self.hands = mp_hands.Hands(
             max_num_hands=1, 
-            min_detection_confidence=0.6,
+            model_complexity=0, # <-- CRITICAL: Use the lightest model 
+            min_detection_confidence=0.5, # Relax confidence slightly
             min_tracking_confidence=0.5
         )
         self.face_mesh = mp_face_mesh.FaceMesh(
             max_num_faces=1, 
-            refine_landmarks=False, # Optimized for cloud performance
-            min_detection_confidence=0.6
+            refine_landmarks=False, # CRITICAL: Optimized for cloud performance
+            min_detection_confidence=0.5 # Relax confidence slightly
         )
 
         # State Variables
@@ -145,7 +144,7 @@ class UnifiedVideoTransformer(VideoTransformerBase):
         img_h, img_w, _ = img.shape
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        # --- DETECTION LOGIC (Same as before) ---
+        # --- DETECTION LOGIC ---
         
         # Hand Detection
         hand_result = self.hands.process(rgb)
@@ -218,7 +217,7 @@ class UnifiedVideoTransformer(VideoTransformerBase):
         return img
 
     def close(self):
-        """CRITICAL: Release MediaPipe resources when the stream closes."""
+        """Releases MediaPipe resources when the stream closes."""
         self.hands.close()
         self.face_mesh.close()
 
@@ -231,6 +230,4 @@ webrtc_streamer(
     key="unified_detection_system",
     video_transformer_factory=UnifiedVideoTransformer,
     media_stream_constraints={"video": True, "audio": False},
-    # The image shows the video element is being created and destroyed, suggesting a timeout.
-    # We are keeping the performance fixes from the last step (refine_landmarks=False)
 )
